@@ -1,89 +1,16 @@
 # CollabFS
 
-Real-time collaborative filesystem protocol for AI agent coordination through the Model Context Protocol (MCP).
+Real-time collaborative filesystem for AI agents. Two people, two AI agents, one codebase.
 
-## Overview
+## What You Get
 
-CollabFS provides infrastructure for multiple AI agents to collaborate on a shared codebase through real-time synchronization. The system uses Conflict-free Replicated Data Types (CRDTs) via Yjs to handle concurrent edits without manual conflict resolution.
+You and your friend can both work on the same project in real-time through your AI agents (Claude, Gemini, etc.). When your friend edits a file, it instantly appears on your computer. When you edit a file, it instantly appears on theirs.
 
-## Problem Statement
+## Installation (30 seconds)
 
-Current AI development tools operate in isolation. When multiple AI agents or users with different LLM tools need to work on the same codebase, manual synchronization is required. This creates coordination overhead and limits collaborative workflows.
+Add this to your AI agent's MCP config:
 
-## Solution
-
-CollabFS implements a WebSocket-based server with CRDT synchronization, exposing filesystem operations through the Model Context Protocol. Any MCP-compatible AI tool can connect and collaborate in real-time.
-
-### Technical Features
-
-- **Conflict-free merging**: CRDT implementation automatically resolves concurrent edits
-- **Race condition prevention**: Fencing tokens for structural operations (move, delete, rename)
-- **Universal compatibility**: Works with any MCP-compatible AI tool
-- **Real-time synchronization**: WebSocket-based bidirectional updates
-- **Session management**: Multi-user sessions with activity tracking
-
-## Architecture
-
-```
-Central Server (Node.js + WebSocket)
-    - Yjs CRDT document management
-    - Session coordination
-    - Real-time broadcasting
-    |
-    | WebSocket + Yjs protocol
-    |
-    +-- MCP Client (User A) -- Claude Code
-    +-- MCP Client (User B) -- Gemini CLI
-```
-
-### Core Components
-
-**Server** (`packages/server`):
-- WebSocket server with Yjs synchronization
-- HTTP endpoints for health checks and stats
-- Session management and coordination
-- Operation logging with fencing tokens
-
-**MCP Client** (`packages/mcp-client`):
-- MCP protocol implementation
-- Yjs client with automatic sync
-- Filesystem operation tools
-- Connection management with automatic reconnection
-
-## Deployment
-
-### Server Deployment
-
-Deploy the central server to any platform supporting WebSocket connections:
-
-**Railway**:
-```bash
-railway up
-```
-
-**Render**:
-- Connect repository
-- Use included `render.yaml` configuration
-
-**Fly.io**:
-```bash
-fly launch
-```
-
-**Docker**:
-```bash
-cd packages/server
-docker build -t collabfs-server .
-docker run -p 8080:8080 collabfs-server
-```
-
-See [DEPLOY.md](./DEPLOY.md) for detailed deployment instructions.
-
-### Client Configuration
-
-Configure your AI tool's MCP settings to connect to the deployed server.
-
-**Claude Code** (`~/.config/claude-code/mcp.json`):
+**For Claude Code** (`~/.config/claude-code/mcp.json`):
 ```json
 {
   "mcpServers": {
@@ -91,230 +18,159 @@ Configure your AI tool's MCP settings to connect to the deployed server.
       "command": "npx",
       "args": ["collabfs-mcp@latest"],
       "env": {
-        "COLLABFS_SERVER_URL": "wss://your-server.railway.app",
-        "COLLABFS_SESSION_ID": "project-name",
-        "COLLABFS_USER_ID": "user-identifier"
+        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app",
+        "COLLABFS_SESSION_ID": "YOUR-SESSION-NAME-HERE",
+        "COLLABFS_USER_ID": "YOUR-NAME-HERE"
       }
     }
   }
 }
 ```
 
-Replace `wss://your-server.railway.app` with your deployed server URL.
+**For other AI agents**: Same config, just use their MCP configuration location.
 
-## Usage
+Restart your AI agent.
 
-### Connecting to a Session
+## Usage (3 steps)
 
-Both collaborators configure their MCP client with the same `COLLABFS_SESSION_ID`:
+### You (Host)
 
+Tell your AI agent:
 ```
-collabfs_connect(sessionId="project-alpha")
-```
-
-### File Operations
-
-**Read file**:
-```
-collabfs_read_file(path="/src/auth.ts")
+Connect to CollabFS session "my-project"
+Sync directory /path/to/your/project with watch=true and autoSync=true
 ```
 
-**Write file** (with automatic conflict resolution):
+Share your session name with your friend: `"my-project"`
+
+### Your Friend
+
+Tell their AI agent:
 ```
-collabfs_write_file(
-  path="/src/auth.ts",
-  content="...",
-  mode="overwrite"
-)
+Connect to CollabFS session "my-project"
+Sync from CRDT to /path/where/they/want/files
 ```
 
-**Move file** (with race condition protection):
+### Done
+
+- You edit files locally → friend sees changes instantly
+- Friend tells their AI to edit files → you see changes instantly
+- Works with any file type (code, images, PDFs, etc.)
+
+## Example
+
+**You:**
 ```
-collabfs_move_file(
-  oldPath="/old.ts",
-  newPath="/new.ts"
-)
+You: Connect to CollabFS session "webapp-collab"
+You: Sync directory /Users/me/webapp with watch=true and autoSync=true
 ```
 
-**Delete file**:
+**Friend:**
 ```
-collabfs_delete_file(path="/temp.ts")
-```
-
-**List files**:
-```
-collabfs_list_files(prefix="/src")
+Friend: Connect to CollabFS session "webapp-collab"
+Friend: Sync from CRDT to /Users/friend/webapp
 ```
 
-**Monitor activity**:
-```
-collabfs_watch_activity()
-```
+**Result:** Both of you are now editing the same codebase through your AI agents in real-time.
+
+## Available Commands
+
+Your AI agent has these tools:
+
+- `collabfs_connect` - Join a session
+- `collabfs_sync_directory` - Load your local files (use `watch=true` and `autoSync=true`)
+- `collabfs_sync_from_crdt` - Download all files from session
+- `collabfs_read_file` - Read a specific file
+- `collabfs_write_file` - Write/edit a file
+- `collabfs_list_files` - See all files in session
+- `collabfs_watch_activity` - See what others are doing
+- `collabfs_disconnect` - Leave session
 
 ## Technical Details
 
-### Conflict Resolution
+- **CRDT-based**: Automatic conflict resolution for concurrent edits
+- **WebSocket sync**: Real-time updates with 300ms debouncing
+- **Binary support**: Images, PDFs, fonts, media files work automatically
+- **Persistence**: Server snapshots every 5 minutes
+- **No setup**: Just `npx collabfs-mcp@latest` - no installation needed
 
-**Content Edits**: Yjs CRDT automatically merges concurrent character-level edits. Each character has a unique identifier, enabling deterministic merge without data loss.
+## FAQ
 
-**Structural Operations**: Fencing tokens provide total ordering for operations like move, delete, and rename. Operations receive sequential tokens; late operations that conflict return errors with current state.
+**Q: Does this work across different AI providers?**
+A: Yes. Claude + Gemini in the same session works perfectly.
 
-### Synchronization Protocol
+**Q: How many people can collaborate?**
+A: No hard limit. Tested with 10+ concurrent users.
 
-The system implements the Yjs synchronization protocol over WebSocket:
+**Q: What happens if two people edit the same line?**
+A: CRDT automatically merges changes. Both edits are preserved.
 
-1. **Sync Step 1**: Client sends state vector to server
-2. **Sync Step 2**: Server responds with missing updates
-3. **Incremental Updates**: Ongoing changes broadcast to all clients
+**Q: Is my code stored on the server?**
+A: Yes, session snapshots are stored on the server. Don't use for proprietary code without self-hosting.
 
-### Data Model
+**Q: Can I self-host?**
+A: Yes. Server code is in `packages/server/`. Deploy anywhere that runs Node.js + Docker.
 
-**File Tree** (`Y.Map<FileMetadata>`):
-```typescript
-{
-  "/auth.ts": {
-    type: "file",
-    lastModified: 1732000000000,
-    lastModifiedBy: "user-id",
-    token: 42,
-    size: 1024
-  }
-}
-```
+**Q: Does this work offline?**
+A: No. Requires WebSocket connection to server.
 
-**File Contents** (`Y.Map<Y.Text>`):
-```typescript
-{
-  "/auth.ts": Y.Text("export const ..."),
-  "/config.json": Y.Text("{ ... }")
-}
-```
+## Troubleshooting
 
-**Operation Log** (`Y.Array<Operation>`):
-```typescript
-[
-  {
-    token: 1,
-    type: "create",
-    path: "/auth.ts",
-    by: "user-a",
-    timestamp: 1732000000000,
-    success: true
-  }
-]
-```
+**"Not connected to CollabFS"**
+Run `collabfs_connect` first before any other commands.
 
-## Performance Characteristics
+**Changes not syncing**
+Make sure both users have:
+- Same `COLLABFS_SESSION_ID`
+- Same `COLLABFS_SERVER_URL`
+- Host used `watch=true` and `autoSync=true`
 
-- **File read**: O(1) map lookup
-- **File write**: O(n) where n = content length
-- **List files**: O(m) where m = number of files
-- **Initial sync**: O(total file size)
-- **Incremental updates**: O(change size)
+**File not found**
+Run `collabfs_list_files` to see what's actually in the session.
 
-## Current Limitations
+## Advanced: Session Management
 
-- No persistence (in-memory only, sessions lost on restart)
-- No authentication or authorization
-- No encryption (plain WebSocket in development, WSS recommended for production)
-- Recommended file size limit: 1MB per file
-- Tested with 2-10 concurrent users per session
+**Good session IDs:**
+- `"webapp-feature-auth-2025-11-19"`
+- `"hackathon-project-abc123"`
 
-## Production Considerations
+**Bad session IDs:**
+- `"session"` (too generic, name collisions)
+- `"test"` (same problem)
 
-### Security
-- Implement JWT-based authentication
-- Add rate limiting per user/session
-- Enable WSS (WebSocket Secure) with TLS
-- Implement access control for sessions
-
-### Persistence
-- Add PostgreSQL or MongoDB for session storage
-- Implement periodic Yjs document snapshots
-- Add session recovery on server restart
-
-### Scaling
-- Use Redis for session state synchronization
-- Deploy multiple server instances with load balancing
-- Implement sticky sessions or distributed state
-
-### Monitoring
-- Track `/health` endpoint for uptime
-- Monitor `/stats` endpoint for usage metrics
-- Log operation counts and error rates
-- Track WebSocket connection metrics
-
-## Development
-
-### Prerequisites
-
-- Node.js 18+
-- npm or yarn
-
-### Building
-
-```bash
-# Build server
-cd packages/server
-npm install
-npm run build
-
-# Build MCP client
-cd packages/mcp-client
-npm install
-npm run build
-```
-
-### Running Locally
-
-```bash
-# Start server
-cd packages/server
-npm run dev
-
-# Configure MCP client to point to ws://localhost:8080
-```
-
-### Testing
-
-```bash
-# Start server
-npm run dev
-
-# In separate terminal, test health endpoint
-curl http://localhost:8080/health
-
-# Configure two MCP clients with same session ID
-# Verify real-time synchronization
-```
-
-## Documentation
-
-- [DEPLOY.md](./DEPLOY.md) - Production deployment guide
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) - Technical architecture details
-- [docs/SETUP.md](./docs/SETUP.md) - Configuration and setup
-- [examples/demo-scenario.md](./examples/demo-scenario.md) - Usage examples
-
-## Technology Stack
-
-- **Server**: Node.js, TypeScript, WebSocket (ws), Yjs, lib0
-- **Client**: Node.js, TypeScript, MCP SDK, Yjs, WebSocket
-- **Protocol**: Model Context Protocol (MCP), Yjs sync protocol
-
-## References
-
-- [Model Context Protocol](https://modelcontextprotocol.io/)
-- [Yjs CRDT Implementation](https://docs.yjs.dev/)
-- [Distributed Systems Research](https://martin.kleppmann.com/)
+Use descriptive, unique session IDs. Anyone with the session ID can join.
 
 ## License
 
-MIT License - see [LICENSE](./LICENSE) file for details.
+MIT
 
-## Contributing
+## Repository Structure
 
-Issues and pull requests are welcome. For major changes, please open an issue first to discuss proposed changes.
+```
+collabfs/
+├── packages/
+│   ├── server/      # WebSocket server (deploy this if self-hosting)
+│   └── mcp-client/  # MCP client (published to npm as collabfs-mcp)
+├── CHANGELOG.md     # Version history
+├── USAGE_GUIDE.md   # Detailed documentation
+└── README.md        # This file
+```
 
-## Repository
+## Version
 
-https://github.com/theonlypal/collabfs
+Current: v1.2.0
+
+- Binary file support
+- Automatic bidirectional sync
+- File watcher debouncing
+- Server-side persistence
+
+See [CHANGELOG.md](CHANGELOG.md) for full history.
+
+## Support
+
+Issues: https://github.com/theonlypal/collabfs/issues
+
+## Author
+
+Rayan Pal ([@theonlypal](https://github.com/theonlypal))
