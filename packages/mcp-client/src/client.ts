@@ -15,7 +15,7 @@ interface ClientConfig {
 
 export class CollabFSClient {
   private ws: WebSocket | null = null;
-  private doc: Y.Doc;
+  public readonly doc: Y.Doc;
   private config: ClientConfig;
   private connected: boolean = false;
   private reconnectAttempts: number = 0;

@@ -15,6 +15,9 @@ import {
 import { CollabFSClient } from './client.js';
 import { z } from 'zod';
 import * as Y from 'yjs';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as fsPromises from 'fs/promises';
 
 // Configuration from environment variables
 const SERVER_URL = process.env.COLLABFS_SERVER_URL || '';
@@ -56,6 +59,8 @@ Visit: https://github.com/theonlypal/collabfs for setup instructions.
 class CollabFSMCPServer {
   private server: Server;
   private client: CollabFSClient | null = null;
+  private fileWatcher: fs.FSWatcher | null = null;
+  private watchedDirectory: string | null = null;
 
   constructor() {
     this.server = new Server(
@@ -219,6 +224,70 @@ class CollabFSMCPServer {
           properties: {},
         },
       },
+      {
+        name: 'collabfs_sync_directory',
+        description: 'Load all files from a local directory into the collaborative session. Use this to share an existing project with collaborators.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            localPath: {
+              type: 'string',
+              description: 'Absolute path to the directory to sync (e.g., "/Users/johncox/my-project")',
+            },
+            watch: {
+              type: 'boolean',
+              description: 'If true, continuously watch directory for changes and sync automatically',
+              default: false,
+            },
+            exclude: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'Patterns to exclude (e.g., ["node_modules", ".git", "dist"])',
+              default: ['node_modules', '.git', 'dist', 'build', '.DS_Store'],
+            },
+          },
+          required: ['localPath'],
+        },
+      },
+      {
+        name: 'collabfs_write_to_disk',
+        description: 'Write a file from the collaborative session to local disk. Use this to persist changes made by collaborators.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            collabPath: {
+              type: 'string',
+              description: 'Path in the collaborative session (e.g., "/src/auth.ts")',
+            },
+            localPath: {
+              type: 'string',
+              description: 'Absolute local path to write to (e.g., "/Users/johncox/my-project/src/auth.ts")',
+            },
+          },
+          required: ['collabPath', 'localPath'],
+        },
+      },
+      {
+        name: 'collabfs_sync_from_crdt',
+        description: 'Write all files from the collaborative session to a local directory. Use this to download all changes from collaborators.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            localPath: {
+              type: 'string',
+              description: 'Absolute path to the directory to write to (e.g., "/Users/johncox/my-project")',
+            },
+            overwrite: {
+              type: 'boolean',
+              description: 'If true, overwrite existing local files. If false, skip existing files.',
+              default: true,
+            },
+          },
+          required: ['localPath'],
+        },
+      },
     ];
   }
 
@@ -243,6 +312,12 @@ class CollabFSMCPServer {
           return await this.handleWatchActivity(args);
         case 'collabfs_disconnect':
           return await this.handleDisconnect(args);
+        case 'collabfs_sync_directory':
+          return await this.handleSyncDirectory(args);
+        case 'collabfs_write_to_disk':
+          return await this.handleWriteToDisk(args);
+        case 'collabfs_sync_from_crdt':
+          return await this.handleSyncFromCRDT(args);
         default:
           throw new Error(`Unknown tool: ${name}`);
       }
@@ -515,6 +590,14 @@ class CollabFSMCPServer {
     }
 
     const sessionId = this.client.getSessionId();
+
+    // Stop file watcher if active
+    if (this.fileWatcher) {
+      this.fileWatcher.close();
+      this.fileWatcher = null;
+      this.watchedDirectory = null;
+    }
+
     this.client.destroy();
     this.client = null;
 
@@ -523,6 +606,265 @@ class CollabFSMCPServer {
         {
           type: 'text',
           text: `Disconnected from session: ${sessionId}`,
+        },
+      ],
+    };
+  }
+
+  private async handleSyncDirectory(args: any): Promise<any> {
+    this.ensureConnected();
+
+    const { localPath, watch = false, exclude = ['node_modules', '.git', 'dist', 'build', '.DS_Store'] } = args;
+
+    if (!path.isAbsolute(localPath)) {
+      throw new Error('localPath must be an absolute path');
+    }
+
+    if (!fs.existsSync(localPath)) {
+      throw new Error(`Directory does not exist: ${localPath}`);
+    }
+
+    const stats = await fsPromises.stat(localPath);
+    if (!stats.isDirectory()) {
+      throw new Error(`Path is not a directory: ${localPath}`);
+    }
+
+    // Recursively load all files
+    const loadedFiles: string[] = [];
+    const errors: string[] = [];
+
+    const shouldExclude = (filePath: string): boolean => {
+      const relativePath = path.relative(localPath, filePath);
+      return exclude.some((pattern: string) => {
+        if (pattern.includes('*')) {
+          // Simple glob matching
+          const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+          return regex.test(relativePath);
+        }
+        return relativePath.includes(pattern);
+      });
+    };
+
+    const loadDirectory = async (dirPath: string) => {
+      const entries = await fsPromises.readdir(dirPath, { withFileTypes: true });
+
+      for (const entry of entries) {
+        const fullPath = path.join(dirPath, entry.name);
+
+        if (shouldExclude(fullPath)) {
+          continue;
+        }
+
+        if (entry.isDirectory()) {
+          await loadDirectory(fullPath);
+        } else if (entry.isFile()) {
+          try {
+            const content = await fsPromises.readFile(fullPath, 'utf-8');
+            const relativePath = '/' + path.relative(localPath, fullPath).replace(/\\/g, '/');
+
+            // Write to CRDT
+            let ytext = this.client!.fileContents.get(relativePath);
+            this.client!.doc.transact(() => {
+              if (!ytext) {
+                ytext = new Y.Text();
+                this.client!.fileContents.set(relativePath, ytext);
+              }
+              ytext.delete(0, ytext.length);
+              ytext.insert(0, content);
+
+              // Update metadata
+              this.client!.fileTree.set(relativePath, {
+                type: 'file',
+                lastModified: Date.now(),
+                lastModifiedBy: this.client!.getUserId(),
+                token: Date.now(),
+                size: content.length,
+                localPath: fullPath,
+              });
+            });
+
+            loadedFiles.push(relativePath);
+          } catch (error: any) {
+            errors.push(`${fullPath}: ${error.message}`);
+          }
+        }
+      }
+    };
+
+    await loadDirectory(localPath);
+
+    // Set up file watcher if requested
+    if (watch) {
+      if (this.fileWatcher) {
+        this.fileWatcher.close();
+      }
+
+      this.watchedDirectory = localPath;
+      this.fileWatcher = fs.watch(localPath, { recursive: true }, async (eventType, filename) => {
+        if (!filename || !this.client) return;
+
+        const fullPath = path.join(localPath, filename);
+
+        if (shouldExclude(fullPath)) {
+          return;
+        }
+
+        try {
+          const relativePath = '/' + path.relative(localPath, fullPath).replace(/\\/g, '/');
+
+          if (eventType === 'change' || eventType === 'rename') {
+            if (fs.existsSync(fullPath)) {
+              const stats = await fsPromises.stat(fullPath);
+              if (stats.isFile()) {
+                const content = await fsPromises.readFile(fullPath, 'utf-8');
+
+                let ytext = this.client!.fileContents.get(relativePath);
+                this.client!.doc.transact(() => {
+                  if (!ytext) {
+                    ytext = new Y.Text();
+                    this.client!.fileContents.set(relativePath, ytext);
+                  }
+                  ytext.delete(0, ytext.length);
+                  ytext.insert(0, content);
+
+                  this.client!.fileTree.set(relativePath, {
+                    type: 'file',
+                    lastModified: Date.now(),
+                    lastModifiedBy: this.client!.getUserId(),
+                    token: Date.now(),
+                    size: content.length,
+                    localPath: fullPath,
+                  });
+                });
+
+                console.error(`[File Watcher] Synced ${relativePath}`);
+              }
+            } else {
+              // File was deleted
+              this.client!.doc.transact(() => {
+                this.client!.fileContents.delete(relativePath);
+                this.client!.fileTree.delete(relativePath);
+              });
+              console.error(`[File Watcher] Deleted ${relativePath}`);
+            }
+          }
+        } catch (error: any) {
+          console.error(`[File Watcher] Error processing ${filename}:`, error.message);
+        }
+      });
+    }
+
+    let resultText = `Synced ${loadedFiles.length} file(s) from ${localPath}`;
+    if (watch) {
+      resultText += `\n\nFile watcher active: Local changes will automatically sync to CollabFS`;
+    }
+    if (errors.length > 0) {
+      resultText += `\n\nErrors (${errors.length}):\n${errors.slice(0, 10).join('\n')}`;
+      if (errors.length > 10) {
+        resultText += `\n... and ${errors.length - 10} more`;
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: resultText,
+        },
+      ],
+    };
+  }
+
+  private async handleWriteToDisk(args: any): Promise<any> {
+    this.ensureConnected();
+
+    const { collabPath, localPath } = args;
+
+    if (!path.isAbsolute(localPath)) {
+      throw new Error('localPath must be an absolute path');
+    }
+
+    const ytext = this.client!.fileContents.get(collabPath);
+    if (!ytext) {
+      throw new Error(`File not found in collaborative session: ${collabPath}`);
+    }
+
+    const content = ytext.toString();
+
+    // Ensure directory exists
+    const dirPath = path.dirname(localPath);
+    await fsPromises.mkdir(dirPath, { recursive: true });
+
+    // Write file
+    await fsPromises.writeFile(localPath, content, 'utf-8');
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `Written ${collabPath} to ${localPath}\nSize: ${content.length} bytes`,
+        },
+      ],
+    };
+  }
+
+  private async handleSyncFromCRDT(args: any): Promise<any> {
+    this.ensureConnected();
+
+    const { localPath, overwrite = true } = args;
+
+    if (!path.isAbsolute(localPath)) {
+      throw new Error('localPath must be an absolute path');
+    }
+
+    // Ensure directory exists
+    await fsPromises.mkdir(localPath, { recursive: true });
+
+    const written: string[] = [];
+    const skipped: string[] = [];
+    const errors: string[] = [];
+
+    for (const [collabPath, ytext] of this.client!.fileContents.entries()) {
+      try {
+        const content = ytext.toString();
+        const relativePath = collabPath.startsWith('/') ? collabPath.slice(1) : collabPath;
+        const fullPath = path.join(localPath, relativePath);
+
+        // Check if file exists
+        const exists = fs.existsSync(fullPath);
+        if (exists && !overwrite) {
+          skipped.push(collabPath);
+          continue;
+        }
+
+        // Ensure directory exists
+        const dirPath = path.dirname(fullPath);
+        await fsPromises.mkdir(dirPath, { recursive: true });
+
+        // Write file
+        await fsPromises.writeFile(fullPath, content, 'utf-8');
+        written.push(collabPath);
+      } catch (error: any) {
+        errors.push(`${collabPath}: ${error.message}`);
+      }
+    }
+
+    let resultText = `Synced ${written.length} file(s) to ${localPath}`;
+    if (skipped.length > 0) {
+      resultText += `\nSkipped ${skipped.length} existing file(s)`;
+    }
+    if (errors.length > 0) {
+      resultText += `\n\nErrors (${errors.length}):\n${errors.slice(0, 10).join('\n')}`;
+      if (errors.length > 10) {
+        resultText += `\n... and ${errors.length - 10} more`;
+      }
+    }
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: resultText,
         },
       ],
     };

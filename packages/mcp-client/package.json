@@ -1,6 +1,6 @@
 {
   "name": "collabfs-mcp",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "MCP server for collaborative filesystem - enables AI agents to collaborate in real-time",
   "type": "module",
   "bin": {
