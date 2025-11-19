@@ -6,14 +6,17 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies
-RUN npm ci --only=production
+# Install dependencies (use npm install since we don't have lockfile)
+RUN npm install --production=false
 
 # Copy source
 COPY src ./src
 
 # Build
 RUN npm run build
+
+# Remove dev dependencies after build
+RUN npm prune --production
 
 # Expose port
 EXPOSE 8080
