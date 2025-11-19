@@ -298,7 +298,7 @@ export class CollabFSServer {
     console.log(`[Server] ${message.userId} joined session ${message.sessionId}`);
   }
 
-  private handleLeave(ws: WebSocket, message: ClientMessage): void {
+  private async handleLeave(ws: WebSocket, message: ClientMessage): Promise<void> {
     const client = this.clients.get(ws);
     if (!client) return;
 
@@ -314,7 +314,7 @@ export class CollabFSServer {
 
       // Cleanup empty sessions
       if (session.getStats().participants.length === 0) {
-        session.destroy();
+        await session.destroy();
         this.sessions.delete(client.sessionId);
         console.log(`[Server] Removed empty session: ${client.sessionId}`);
       }
@@ -353,11 +353,11 @@ export class CollabFSServer {
     }
   }
 
-  private handleDisconnect(ws: WebSocket): void {
+  private async handleDisconnect(ws: WebSocket): Promise<void> {
     const client = this.clients.get(ws);
     if (client) {
       console.log(`[Server] Client disconnected: ${client.userId}`);
-      this.handleLeave(ws, {
+      await this.handleLeave(ws, {
         type: 'leave',
         userId: client.userId,
         sessionId: client.sessionId
@@ -406,19 +406,20 @@ export class CollabFSServer {
   /**
    * Shutdown server
    */
-  close(): Promise<void> {
+  async close(): Promise<void> {
+    console.log('[Server] Shutting down gracefully...');
+
+    // Close all client connections
+    this.clients.forEach((client, ws) => {
+      ws.close();
+    });
+
+    // Destroy all sessions
+    const destroyPromises = Array.from(this.sessions.values()).map(session => session.destroy());
+    await Promise.all(destroyPromises);
+
+    // Close WebSocket server
     return new Promise((resolve) => {
-      console.log('[Server] Shutting down gracefully...');
-
-      // Close all client connections
-      this.clients.forEach((client, ws) => {
-        ws.close();
-      });
-
-      // Destroy all sessions
-      this.sessions.forEach(session => session.destroy());
-
-      // Close WebSocket server
       this.wss.close(() => {
         // Close HTTP server
         this.httpServer.close(() => {

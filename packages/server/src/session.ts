@@ -5,6 +5,8 @@
 
 import * as Y from 'yjs';
 import { Session, Operation, Activity, FileMetadata } from './types.js';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 export class CollabSession {
   public readonly sessionId: string;
@@ -16,10 +18,13 @@ export class CollabSession {
 
   private session: Session;
   private tokenCounter: number = 0;
+  private snapshotInterval: NodeJS.Timeout | null = null;
+  private persistencePath: string;
 
-  constructor(sessionId: string) {
+  constructor(sessionId: string, persistencePath: string = '/tmp/collabfs-snapshots') {
     this.sessionId = sessionId;
     this.doc = new Y.Doc();
+    this.persistencePath = persistencePath;
 
     // Initialize CRDT structures
     this.fileTree = this.doc.getMap('fileTree');
@@ -33,6 +38,18 @@ export class CollabSession {
       participants: new Set(),
       tokenCounter: 0
     };
+
+    // Try to restore from snapshot
+    this.restoreFromSnapshot().catch(err => {
+      console.log(`[Session] No snapshot found for ${sessionId}, starting fresh`);
+    });
+
+    // Setup periodic snapshots every 5 minutes
+    this.snapshotInterval = setInterval(() => {
+      this.saveSnapshot().catch(err => {
+        console.error(`[Session] Failed to save snapshot:`, err);
+      });
+    }, 5 * 60 * 1000);
 
     console.log(`[Session] Created session: ${sessionId}`);
   }
@@ -287,9 +304,55 @@ export class CollabSession {
   }
 
   /**
+   * Save snapshot of session state to disk
+   */
+  async saveSnapshot(): Promise<void> {
+    try {
+      await fs.mkdir(this.persistencePath, { recursive: true });
+
+      const state = Y.encodeStateAsUpdate(this.doc);
+      const snapshotPath = path.join(this.persistencePath, `${this.sessionId}.snapshot`);
+
+      await fs.writeFile(snapshotPath, Buffer.from(state));
+
+      console.log(`[Session] Saved snapshot for ${this.sessionId} (${state.length} bytes)`);
+    } catch (error) {
+      console.error(`[Session] Error saving snapshot:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * Restore session state from snapshot
+   */
+  async restoreFromSnapshot(): Promise<boolean> {
+    try {
+      const snapshotPath = path.join(this.persistencePath, `${this.sessionId}.snapshot`);
+
+      const data = await fs.readFile(snapshotPath);
+      Y.applyUpdate(this.doc, new Uint8Array(data));
+
+      console.log(`[Session] Restored snapshot for ${this.sessionId} (${data.length} bytes)`);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Cleanup session resources
    */
-  destroy(): void {
+  async destroy(): Promise<void> {
+    // Save final snapshot before destroying
+    await this.saveSnapshot().catch(err => {
+      console.error(`[Session] Failed to save final snapshot:`, err);
+    });
+
+    if (this.snapshotInterval) {
+      clearInterval(this.snapshotInterval);
+      this.snapshotInterval = null;
+    }
+
     this.doc.destroy();
     console.log(`[Session] Destroyed session: ${this.sessionId}`);
   }

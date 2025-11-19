@@ -61,6 +61,9 @@ class CollabFSMCPServer {
   private client: CollabFSClient | null = null;
   private fileWatcher: fs.FSWatcher | null = null;
   private watchedDirectory: string | null = null;
+  private autoSyncEnabled: boolean = false;
+  private syncDebounceTimers: Map<string, NodeJS.Timeout> = new Map();
+  private readonly DEBOUNCE_MS = 300;
 
   constructor() {
     this.server = new Server(
@@ -237,6 +240,11 @@ class CollabFSMCPServer {
             watch: {
               type: 'boolean',
               description: 'If true, continuously watch directory for changes and sync automatically',
+              default: false,
+            },
+            autoSync: {
+              type: 'boolean',
+              description: 'If true, automatically write remote changes from CRDT back to disk',
               default: false,
             },
             exclude: {
@@ -614,7 +622,8 @@ class CollabFSMCPServer {
   private async handleSyncDirectory(args: any): Promise<any> {
     this.ensureConnected();
 
-    const { localPath, watch = false, exclude = ['node_modules', '.git', 'dist', 'build', '.DS_Store'] } = args;
+    const { localPath, watch = false, autoSync = false, exclude = ['node_modules', '.git', 'dist', 'build', '.DS_Store'] } = args;
+    this.autoSyncEnabled = autoSync;
 
     if (!path.isAbsolute(localPath)) {
       throw new Error('localPath must be an absolute path');
@@ -659,7 +668,7 @@ class CollabFSMCPServer {
           await loadDirectory(fullPath);
         } else if (entry.isFile()) {
           try {
-            const content = await fsPromises.readFile(fullPath, 'utf-8');
+            const { content, isBinary } = await this.readFileContent(fullPath);
             const relativePath = '/' + path.relative(localPath, fullPath).replace(/\\/g, '/');
 
             // Write to CRDT
@@ -680,6 +689,7 @@ class CollabFSMCPServer {
                 token: Date.now(),
                 size: content.length,
                 localPath: fullPath,
+                isBinary,
               });
             });
 
@@ -700,7 +710,7 @@ class CollabFSMCPServer {
       }
 
       this.watchedDirectory = localPath;
-      this.fileWatcher = fs.watch(localPath, { recursive: true }, async (eventType, filename) => {
+      this.fileWatcher = fs.watch(localPath, { recursive: true }, (eventType, filename) => {
         if (!filename || !this.client) return;
 
         const fullPath = path.join(localPath, filename);
@@ -709,54 +719,73 @@ class CollabFSMCPServer {
           return;
         }
 
-        try {
-          const relativePath = '/' + path.relative(localPath, fullPath).replace(/\\/g, '/');
+        // Debounce file changes to prevent flooding
+        const debouncedHandler = async () => {
+          try {
+            const relativePath = '/' + path.relative(localPath, fullPath).replace(/\\/g, '/');
 
-          if (eventType === 'change' || eventType === 'rename') {
-            if (fs.existsSync(fullPath)) {
-              const stats = await fsPromises.stat(fullPath);
-              if (stats.isFile()) {
-                const content = await fsPromises.readFile(fullPath, 'utf-8');
+            if (eventType === 'change' || eventType === 'rename') {
+              if (fs.existsSync(fullPath)) {
+                const stats = await fsPromises.stat(fullPath);
+                if (stats.isFile()) {
+                  const { content, isBinary } = await this.readFileContent(fullPath);
 
-                let ytext = this.client!.fileContents.get(relativePath);
-                this.client!.doc.transact(() => {
-                  if (!ytext) {
-                    ytext = new Y.Text();
-                    this.client!.fileContents.set(relativePath, ytext);
-                  }
-                  ytext.delete(0, ytext.length);
-                  ytext.insert(0, content);
+                  let ytext = this.client!.fileContents.get(relativePath);
+                  this.client!.doc.transact(() => {
+                    if (!ytext) {
+                      ytext = new Y.Text();
+                      this.client!.fileContents.set(relativePath, ytext);
+                    }
+                    ytext.delete(0, ytext.length);
+                    ytext.insert(0, content);
 
-                  this.client!.fileTree.set(relativePath, {
-                    type: 'file',
-                    lastModified: Date.now(),
-                    lastModifiedBy: this.client!.getUserId(),
-                    token: Date.now(),
-                    size: content.length,
-                    localPath: fullPath,
+                    this.client!.fileTree.set(relativePath, {
+                      type: 'file',
+                      lastModified: Date.now(),
+                      lastModifiedBy: this.client!.getUserId(),
+                      token: Date.now(),
+                      size: content.length,
+                      localPath: fullPath,
+                      isBinary,
+                    });
                   });
-                });
 
-                console.error(`[File Watcher] Synced ${relativePath}`);
+                  console.error(`[File Watcher] Synced ${relativePath}`);
+                }
+              } else {
+                // File was deleted
+                this.client!.doc.transact(() => {
+                  this.client!.fileContents.delete(relativePath);
+                  this.client!.fileTree.delete(relativePath);
+                });
+                console.error(`[File Watcher] Deleted ${relativePath}`);
               }
-            } else {
-              // File was deleted
-              this.client!.doc.transact(() => {
-                this.client!.fileContents.delete(relativePath);
-                this.client!.fileTree.delete(relativePath);
-              });
-              console.error(`[File Watcher] Deleted ${relativePath}`);
             }
+          } catch (error: any) {
+            console.error(`[File Watcher] Error processing ${filename}:`, error.message);
           }
-        } catch (error: any) {
-          console.error(`[File Watcher] Error processing ${filename}:`, error.message);
+        };
+
+        // Debounce the handler
+        const debounceKey = `watch-${fullPath}`;
+        if (this.syncDebounceTimers.has(debounceKey)) {
+          clearTimeout(this.syncDebounceTimers.get(debounceKey)!);
         }
+        this.syncDebounceTimers.set(debounceKey, setTimeout(debouncedHandler, this.DEBOUNCE_MS));
       });
+    }
+
+    // Setup auto-sync for remote changes
+    if (autoSync) {
+      this.setupAutoSync();
     }
 
     let resultText = `Synced ${loadedFiles.length} file(s) from ${localPath}`;
     if (watch) {
       resultText += `\n\nFile watcher active: Local changes will automatically sync to CollabFS`;
+    }
+    if (autoSync) {
+      resultText += `\n\nAuto-sync active: Remote changes will automatically sync to disk`;
     }
     if (errors.length > 0) {
       resultText += `\n\nErrors (${errors.length}):\n${errors.slice(0, 10).join('\n')}`;
@@ -789,20 +818,17 @@ class CollabFSMCPServer {
       throw new Error(`File not found in collaborative session: ${collabPath}`);
     }
 
+    const metadata = this.client!.fileTree.get(collabPath);
     const content = ytext.toString();
+    const isBinary = metadata?.isBinary || false;
 
-    // Ensure directory exists
-    const dirPath = path.dirname(localPath);
-    await fsPromises.mkdir(dirPath, { recursive: true });
-
-    // Write file
-    await fsPromises.writeFile(localPath, content, 'utf-8');
+    await this.writeFileContent(localPath, content, isBinary);
 
     return {
       content: [
         {
           type: 'text',
-          text: `Written ${collabPath} to ${localPath}\nSize: ${content.length} bytes`,
+          text: `Written ${collabPath} to ${localPath}\nSize: ${content.length} ${isBinary ? 'bytes (binary)' : 'bytes'}`,
         },
       ],
     };
@@ -827,6 +853,8 @@ class CollabFSMCPServer {
     for (const [collabPath, ytext] of this.client!.fileContents.entries()) {
       try {
         const content = ytext.toString();
+        const metadata = this.client!.fileTree.get(collabPath);
+        const isBinary = metadata?.isBinary || false;
         const relativePath = collabPath.startsWith('/') ? collabPath.slice(1) : collabPath;
         const fullPath = path.join(localPath, relativePath);
 
@@ -837,12 +865,7 @@ class CollabFSMCPServer {
           continue;
         }
 
-        // Ensure directory exists
-        const dirPath = path.dirname(fullPath);
-        await fsPromises.mkdir(dirPath, { recursive: true });
-
-        // Write file
-        await fsPromises.writeFile(fullPath, content, 'utf-8');
+        await this.writeFileContent(fullPath, content, isBinary);
         written.push(collabPath);
       } catch (error: any) {
         errors.push(`${collabPath}: ${error.message}`);
@@ -874,6 +897,89 @@ class CollabFSMCPServer {
     if (!this.client || !this.client.isConnected()) {
       throw new Error('Not connected to CollabFS. Call collabfs_connect first.');
     }
+  }
+
+  private isBinaryFile(filePath: string): boolean {
+    const binaryExtensions = [
+      '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+      '.pdf', '.zip', '.tar', '.gz', '.7z', '.rar',
+      '.exe', '.dll', '.so', '.dylib',
+      '.mp3', '.mp4', '.avi', '.mov', '.wav',
+      '.woff', '.woff2', '.ttf', '.eot',
+      '.bin', '.dat', '.db', '.sqlite',
+      '.pyc', '.class', '.o', '.a'
+    ];
+    const ext = path.extname(filePath).toLowerCase();
+    return binaryExtensions.includes(ext);
+  }
+
+  private async readFileContent(filePath: string): Promise<{ content: string; isBinary: boolean }> {
+    const isBinary = this.isBinaryFile(filePath);
+
+    if (isBinary) {
+      const buffer = await fsPromises.readFile(filePath);
+      return {
+        content: buffer.toString('base64'),
+        isBinary: true
+      };
+    } else {
+      const content = await fsPromises.readFile(filePath, 'utf-8');
+      return {
+        content,
+        isBinary: false
+      };
+    }
+  }
+
+  private async writeFileContent(filePath: string, content: string, isBinary: boolean): Promise<void> {
+    const dirPath = path.dirname(filePath);
+    await fsPromises.mkdir(dirPath, { recursive: true });
+
+    if (isBinary) {
+      const buffer = Buffer.from(content, 'base64');
+      await fsPromises.writeFile(filePath, buffer);
+    } else {
+      await fsPromises.writeFile(filePath, content, 'utf-8');
+    }
+  }
+
+  private setupAutoSync(): void {
+    if (!this.client || !this.watchedDirectory || !this.autoSyncEnabled) return;
+
+    // Listen for remote updates to CRDT and sync to disk
+    this.client.doc.on('update', async (update: Uint8Array, origin: any) => {
+      // Only process remote updates (origin !== this.client means it came from network)
+      if (origin !== this.client && this.watchedDirectory && this.autoSyncEnabled) {
+        // Debounce writes to disk
+        const debouncedSync = async () => {
+          try {
+            // Get all files that were updated
+            this.client!.fileContents.forEach(async (ytext, collabPath) => {
+              const metadata = this.client!.fileTree.get(collabPath);
+              const relativePath = collabPath.startsWith('/') ? collabPath.slice(1) : collabPath;
+              const localFilePath = path.join(this.watchedDirectory!, relativePath);
+
+              // Check if this is a watched file
+              if (localFilePath.startsWith(this.watchedDirectory!)) {
+                const content = ytext.toString();
+                const isBinary = metadata?.isBinary || false;
+
+                await this.writeFileContent(localFilePath, content, isBinary);
+                console.error(`[Auto-Sync] Updated ${collabPath} on disk`);
+              }
+            });
+          } catch (error: any) {
+            console.error('[Auto-Sync] Error:', error.message);
+          }
+        };
+
+        // Debounce the sync operation
+        if (this.syncDebounceTimers.has('auto-sync')) {
+          clearTimeout(this.syncDebounceTimers.get('auto-sync')!);
+        }
+        this.syncDebounceTimers.set('auto-sync', setTimeout(debouncedSync, this.DEBOUNCE_MS));
+      }
+    });
   }
 
   async run(): Promise<void> {
