@@ -419,7 +419,7 @@ class CollabFSMCPServer {
       }
     }, 30000);
 
-    let resultText = `🎉 CollabFS session started!\n\n`;
+    let resultText = `CollabFS session started!\n\n`;
     resultText += `╔════════════════════════════════════════════════════════════╗\n`;
     resultText += `║  JOIN CODE: ${sessionId.padEnd(42)}║\n`;
     resultText += `╚════════════════════════════════════════════════════════════╝\n\n`;
@@ -499,7 +499,7 @@ class CollabFSMCPServer {
       content: [
         {
           type: 'text',
-          text: `✅ Connected to CollabFS session!\n\nJoin Code: ${joinCode}\nUser ID: ${userId}\nServer: ${SERVER_URL}\n\nYou can now collaborate in real-time!\n\nNext steps:\n- Use collabfs_sync_from_crdt to download all files\n- Use collabfs_list_files to see what's available\n- Use collabfs_read_file to read specific files`,
+          text: `Connected to CollabFS session!\n\nJoin Code: ${joinCode}\nUser ID: ${userId}\nServer: ${SERVER_URL}\n\nYou can now collaborate in real-time!\n\nNext steps:\n- Use collabfs_sync_from_crdt to download all files\n- Use collabfs_list_files to see what's available\n- Use collabfs_read_file to read specific files`,
         },
       ],
     };
