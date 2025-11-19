@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: collabfs-server
+    env: docker
+    dockerfilePath: ./packages/server/Dockerfile
+    dockerContext: ./packages/server
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 8080
+    healthCheckPath: /health
+    autoDeploy: true

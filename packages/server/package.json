@@ -1,0 +1,25 @@
+{
+  "name": "@collabfs/server",
+  "version": "0.1.0",
+  "description": "Central WebSocket server for CollabFS collaborative filesystem",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "type-check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "yjs": "^13.6.20",
+    "y-websocket": "^2.0.4",
+    "lib0": "^0.2.98"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}
