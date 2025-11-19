@@ -1,5 +1,140 @@
 # CollabFS Changelog
 
+## [1.3.0] - 2025-11-18
+
+### Zero-Config Join Codes
+
+This release eliminates the need for manual session ID configuration, making CollabFS truly brainless to use.
+
+### Added - MCP Client
+
+**New Tool: collabfs_host_session**
+- Auto-generates human-readable session IDs (e.g., `purple-tiger-2025-11-18-abc123`)
+- Combines session creation + connection + optional directory sync in one step
+- Returns shareable join code in formatted output
+- Format: `{adjective}-{animal}-{date}-{random}` for memorability
+- Optional `localPath` parameter to sync directory immediately with `watch` and `autoSync` enabled by default
+
+**Modified Tool: collabfs_connect**
+- Now accepts `joinCode` parameter instead of `sessionId`
+- Clear error message if join code not provided
+- Backward compatible: environment variable `COLLABFS_SESSION_ID` still works as fallback
+
+**Session ID Generator**
+- 10 adjectives × 10 animals = 100 combinations
+- Date stamp for temporal uniqueness
+- 6-character random suffix for collision avoidance
+- Total entropy: ~2.8 million unique IDs per day
+
+**Environment Variable Changes**
+- `COLLABFS_SERVER_URL`: Still required
+- `COLLABFS_SESSION_ID`: Now optional (only needed if not using collabfs_host_session)
+- `COLLABFS_USER_ID`: Still optional, auto-generated if not provided
+
+### Changed - Documentation
+
+**README.md**
+- Updated from "Installation (30 seconds)" to "Installation (10 seconds)"
+- Updated from "Usage (3 steps)" to "Usage (2 steps)"
+- Removed manual `COLLABFS_SESSION_ID` configuration from examples
+- Added join code examples with formatted output
+- Simplified troubleshooting section
+
+**USAGE_GUIDE.md**
+- Updated from "Quick Start: 2-Minute Setup" to "Quick Start: 1-Minute Setup"
+- Unified MCP config for both host and collaborator (no separate configs)
+- Updated all workflow examples with `collabfs_host_session` and join codes
+- Added new tool reference section for `collabfs_host_session`
+- Updated all 3 example scenarios with zero-config workflow
+
+### User Experience Improvements
+
+**Before v1.3.0:**
+```json
+{
+  "env": {
+    "COLLABFS_SERVER_URL": "wss://...",
+    "COLLABFS_SESSION_ID": "my-project",  // Manual coordination
+    "COLLABFS_USER_ID": "alice"
+  }
+}
+```
+User workflow: Edit JSON → Coordinate session ID with friend → Restart AI → Connect
+
+**After v1.3.0:**
+```json
+{
+  "env": {
+    "COLLABFS_SERVER_URL": "wss://..."  // That's it!
+  }
+}
+```
+User workflow: Tell AI "Start CollabFS session" → Share join code → Friend joins
+
+### Technical Details
+
+**generateSessionId() Function**
+```typescript
+function generateSessionId(): string {
+  const adjectives = ['purple', 'orange', 'silver', ...];
+  const animals = ['tiger', 'eagle', 'dolphin', ...];
+  const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const animal = animals[Math.floor(Math.random() * animals.length)];
+  const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const random = Math.random().toString(36).substring(2, 8);
+  return `${adjective}-${animal}-${date}-${random}`;
+}
+```
+
+**handleHostSession() Method**
+- Generates session ID via `generateSessionId()`
+- Creates CollabFSClient with auto-generated ID
+- Optionally syncs directory if `localPath` provided
+- Returns formatted ASCII box with join code
+- Provides copy-paste instructions for collaborators
+
+### Breaking Changes
+
+None - fully backward compatible with v1.2.0
+
+Users can still use environment variable `COLLABFS_SESSION_ID` and `collabfs_connect({ sessionId })` if desired.
+
+### Migration Guide
+
+No migration needed. v1.2.0 users can upgrade immediately.
+
+**Optional: Simplify your workflow**
+
+Old way (still works):
+```
+1. Edit ~/.config/claude-code/mcp.json to set COLLABFS_SESSION_ID
+2. Tell AI: "Connect to CollabFS session my-project"
+3. Tell friend to use same session ID
+```
+
+New way (recommended):
+```
+1. Tell AI: "Start CollabFS session on /path/to/project"
+2. Share the join code AI provides
+3. Friend: "Join CollabFS with code {join-code}"
+```
+
+### Deployment
+
+**npm Package**: `collabfs-mcp@1.3.0`
+```bash
+npx collabfs-mcp@latest
+```
+
+**Server**: No changes required (uses existing Railway deployment)
+
+### Contributors
+
+- Rayan Pal (theonlypal)
+- Claude (noreply@anthropic.com)
+
+---
+
 ## [1.2.0] - 2025-11-19
 
 ### Production-Grade Enhancements

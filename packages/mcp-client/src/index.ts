@@ -22,7 +22,8 @@ import * as fsPromises from 'fs/promises';
 // Configuration from environment variables
 const SERVER_URL = process.env.COLLABFS_SERVER_URL || '';
 const USER_ID = process.env.COLLABFS_USER_ID || `user_${Math.random().toString(36).substr(2, 9)}`;
-const SESSION_ID = process.env.COLLABFS_SESSION_ID || 'default';
+// SESSION_ID is now optional - users can use collabfs_host_session or collabfs_connect with joinCode
+const SESSION_ID = process.env.COLLABFS_SESSION_ID || '';
 
 if (!SERVER_URL) {
   console.error(`
@@ -39,21 +40,32 @@ Example configuration for Claude Code MCP settings:
   "mcpServers": {
     "collabfs": {
       "command": "npx",
-      "args": ["collabfs-mcp"],
+      "args": ["collabfs-mcp@latest"],
       "env": {
-        "COLLABFS_SERVER_URL": "wss://your-server.railway.app",
-        "COLLABFS_SESSION_ID": "my-project",
-        "COLLABFS_USER_ID": "claude-user"
+        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app"
       }
     }
   }
 }
 
-Replace "wss://your-server.railway.app" with your actual deployed server URL.
+Optional environment variables:
+- COLLABFS_USER_ID: Your user identifier (auto-generated if not provided)
+- COLLABFS_SESSION_ID: Default session for collabfs_connect (not needed if using collabfs_host_session)
 
 Visit: https://github.com/theonlypal/collabfs for setup instructions.
 `);
   process.exit(1);
+}
+
+// Helper function to generate human-readable session IDs
+function generateSessionId(): string {
+  const adjectives = ['purple', 'orange', 'silver', 'golden', 'crimson', 'azure', 'emerald', 'amber', 'violet', 'coral'];
+  const animals = ['tiger', 'eagle', 'dolphin', 'falcon', 'phoenix', 'dragon', 'panther', 'hawk', 'wolf', 'bear'];
+  const adjective = adjectives[Math.floor(Math.random() * adjectives.length)];
+  const animal = animals[Math.floor(Math.random() * animals.length)];
+  const date = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  const random = Math.random().toString(36).substring(2, 8);
+  return `${adjective}-${animal}-${date}-${random}`;
 }
 
 class CollabFSMCPServer {
@@ -111,21 +123,52 @@ class CollabFSMCPServer {
   private getTools(): Tool[] {
     return [
       {
-        name: 'collabfs_connect',
-        description: 'Connect to a CollabFS collaborative session. Must be called first before any file operations.',
+        name: 'collabfs_host_session',
+        description: 'Start a NEW collaborative session and get a join code to share with friends. Auto-generates a unique session ID. Optionally syncs a directory immediately.',
         inputSchema: {
           type: 'object',
           properties: {
-            sessionId: {
+            localPath: {
               type: 'string',
-              description: 'Session ID to join (all collaborators use the same session ID)',
+              description: 'Optional: Absolute path to directory to sync immediately (e.g., "/Users/me/project")',
+            },
+            watch: {
+              type: 'boolean',
+              description: 'If localPath provided, enable file watching for automatic sync',
+              default: true,
+            },
+            autoSync: {
+              type: 'boolean',
+              description: 'If localPath provided, enable automatic remote-to-disk sync',
+              default: true,
+            },
+            exclude: {
+              type: 'array',
+              items: {
+                type: 'string',
+              },
+              description: 'If localPath provided, patterns to exclude',
+              default: ['node_modules', '.git', 'dist', 'build', '.DS_Store'],
+            },
+          },
+        },
+      },
+      {
+        name: 'collabfs_connect',
+        description: 'Connect to an EXISTING CollabFS collaborative session using a join code from the host. Must be called first before any file operations.',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            joinCode: {
+              type: 'string',
+              description: 'Join code from the host (e.g., "purple-tiger-2024-11-18-abc123")',
             },
             userId: {
               type: 'string',
               description: 'Your user ID (optional, auto-generated if not provided)',
             },
           },
-          required: ['sessionId'],
+          required: ['joinCode'],
         },
       },
       {
@@ -304,6 +347,8 @@ class CollabFSMCPServer {
 
     try {
       switch (name) {
+        case 'collabfs_host_session':
+          return await this.handleHostSession(args);
         case 'collabfs_connect':
           return await this.handleConnect(args);
         case 'collabfs_read_file':
@@ -342,21 +387,23 @@ class CollabFSMCPServer {
     }
   }
 
-  private async handleConnect(args: any): Promise<any> {
-    const sessionId = args.sessionId || SESSION_ID;
-    const userId = args.userId || USER_ID;
-
+  private async handleHostSession(args: any): Promise<any> {
     if (this.client) {
       return {
         content: [
           {
             type: 'text',
-            text: `Already connected to session ${this.client.getSessionId()} as ${this.client.getUserId()}`,
+            text: `Already connected to session ${this.client.getSessionId()} as ${this.client.getUserId()}. Disconnect first if you want to start a new session.`,
           },
         ],
       };
     }
 
+    // Generate unique session ID
+    const sessionId = generateSessionId();
+    const userId = USER_ID;
+
+    // Connect to session
     this.client = new CollabFSClient({
       serverUrl: SERVER_URL,
       userId,
@@ -372,11 +419,87 @@ class CollabFSMCPServer {
       }
     }, 30000);
 
+    let resultText = `🎉 CollabFS session started!\n\n`;
+    resultText += `╔════════════════════════════════════════════════════════════╗\n`;
+    resultText += `║  JOIN CODE: ${sessionId.padEnd(42)}║\n`;
+    resultText += `╚════════════════════════════════════════════════════════════╝\n\n`;
+    resultText += `Share this code with your friend so they can join!\n\n`;
+    resultText += `Your friend should tell their AI agent:\n`;
+    resultText += `"Join CollabFS with code ${sessionId}"\n\n`;
+    resultText += `Server: ${SERVER_URL}\n`;
+    resultText += `Host User ID: ${userId}`;
+
+    // If localPath provided, sync directory immediately
+    if (args.localPath) {
+      const { localPath, watch = true, autoSync = true, exclude = ['node_modules', '.git', 'dist', 'build', '.DS_Store'] } = args;
+
+      try {
+        const syncResult = await this.handleSyncDirectory({
+          localPath,
+          watch,
+          autoSync,
+          exclude
+        });
+
+        if (syncResult.content && syncResult.content[0]) {
+          resultText += `\n\n${syncResult.content[0].text}`;
+        }
+      } catch (error: any) {
+        resultText += `\n\nWarning: Failed to sync directory: ${error.message}`;
+      }
+    } else {
+      resultText += `\n\nTo sync a directory, use: collabfs_sync_directory`;
+    }
+
     return {
       content: [
         {
           type: 'text',
-          text: `Connected to CollabFS session "${sessionId}" as "${userId}"\nServer: ${SERVER_URL}\n\nYou can now collaborate with other AI agents in real-time!`,
+          text: resultText,
+        },
+      ],
+    };
+  }
+
+  private async handleConnect(args: any): Promise<any> {
+    const joinCode = args.joinCode || SESSION_ID;
+    const userId = args.userId || USER_ID;
+
+    if (!joinCode) {
+      throw new Error('Join code is required. Get the join code from the host, or use collabfs_host_session to start a new session.');
+    }
+
+    if (this.client) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Already connected to session ${this.client.getSessionId()} as ${this.client.getUserId()}`,
+          },
+        ],
+      };
+    }
+
+    this.client = new CollabFSClient({
+      serverUrl: SERVER_URL,
+      userId,
+      sessionId: joinCode,
+    });
+
+    await this.client.connect();
+
+    // Start heartbeat
+    setInterval(() => {
+      if (this.client) {
+        this.client.sendHeartbeat();
+      }
+    }, 30000);
+
+    return {
+      content: [
+        {
+          type: 'text',
+          text: `✅ Connected to CollabFS session!\n\nJoin Code: ${joinCode}\nUser ID: ${userId}\nServer: ${SERVER_URL}\n\nYou can now collaborate in real-time!\n\nNext steps:\n- Use collabfs_sync_from_crdt to download all files\n- Use collabfs_list_files to see what's available\n- Use collabfs_read_file to read specific files`,
         },
       ],
     };

@@ -1,10 +1,10 @@
 # CollabFS Usage Guide
 
-Complete guide for using CollabFS v1.2.0 to collaborate on real projects with AI agents.
+Complete guide for using CollabFS v1.3.0 to collaborate on real projects with AI agents.
 
-## Quick Start: 2-Minute Setup
+## Quick Start: 1-Minute Setup
 
-### Host (You)
+### Both You and Your Friend
 
 1. Add to Claude Code MCP config (`~/.config/claude-code/mcp.json`):
 
@@ -15,9 +15,7 @@ Complete guide for using CollabFS v1.2.0 to collaborate on real projects with AI
       "command": "npx",
       "args": ["collabfs-mcp@latest"],
       "env": {
-        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app",
-        "COLLABFS_SESSION_ID": "my-project-2025",
-        "COLLABFS_USER_ID": "host-user"
+        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app"
       }
     }
   }
@@ -26,37 +24,26 @@ Complete guide for using CollabFS v1.2.0 to collaborate on real projects with AI
 
 2. Restart Claude Code
 
-3. Tell Claude:
+### Host (You)
+
+Tell Claude:
 ```
-Connect to CollabFS session "my-project-2025"
-Sync directory /Users/me/my-project with watch=true and autoSync=true
+Start CollabFS session on /Users/me/my-project
 ```
+
+Claude responds with a join code like: `purple-tiger-2025-11-18-abc123`
+
+Share this code with your friend.
 
 ### Friend (Collaborator)
 
-1. Same MCP config with different USER_ID:
-
-```json
-{
-  "mcpServers": {
-    "collabfs": {
-      "command": "npx",
-      "args": ["collabfs-mcp@latest"],
-      "env": {
-        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app",
-        "COLLABFS_SESSION_ID": "my-project-2025",
-        "COLLABFS_USER_ID": "friend-user"
-      }
-    }
-  }
-}
+Tell their AI agent:
+```
+Join CollabFS with code purple-tiger-2025-11-18-abc123
+Download all files to /Users/friend/downloaded-project
 ```
 
-2. Tell their AI agent:
-```
-Connect to CollabFS session "my-project-2025"
-Sync from CRDT to /Users/friend/downloaded-project
-```
+That's it! No manual session ID configuration needed.
 
 ## Complete Workflow
 
@@ -69,16 +56,23 @@ Sync from CRDT to /Users/friend/downloaded-project
 **Host Actions:**
 
 ```
-You: Connect to CollabFS session "webapp-collab"
+You: Start CollabFS session on /Users/devA/webapp
 
-Claude: Connected to CollabFS session "webapp-collab" as "host-user"
+Claude: 🎉 CollabFS session started!
+
+╔════════════════════════════════════════════════════════════╗
+║  JOIN CODE: crimson-falcon-2025-11-18-xyz456              ║
+╚════════════════════════════════════════════════════════════╝
+
+Share this code with your friend so they can join!
+
+Your friend should tell their AI agent:
+"Join CollabFS with code crimson-falcon-2025-11-18-xyz456"
+
 Server: wss://collabfs-server-production.up.railway.app
+Host User ID: user_abc123
 
-You can now collaborate with other AI agents in real-time!
-
-You: Sync directory /Users/devA/webapp with watch=true and autoSync=true
-
-Claude: Synced 47 file(s) from /Users/devA/webapp
+Synced 47 file(s) from /Users/devA/webapp
 
 File watcher active: Local changes will automatically sync to CollabFS
 
@@ -86,18 +80,25 @@ Auto-sync active: Remote changes will automatically sync to disk
 ```
 
 **What just happened:**
-1. All 47 files loaded into CRDT (including binary assets)
-2. File watcher started: any local edit → syncs to CRDT → broadcasts to friend
-3. Auto-sync started: any friend edit → syncs from CRDT → writes to your disk
+1. Unique session ID auto-generated: `crimson-falcon-2025-11-18-xyz456`
+2. All 47 files loaded into CRDT (including binary assets)
+3. File watcher started: any local edit → syncs to CRDT → broadcasts to friend
+4. Auto-sync started: any friend edit → syncs from CRDT → writes to your disk
 
 **Friend Actions:**
 
 ```
-Friend: Connect to CollabFS session "webapp-collab"
+Friend: Join CollabFS with code crimson-falcon-2025-11-18-xyz456
 
-Gemini: Connected to CollabFS session "webapp-collab" as "friend-user"
+Gemini: ✅ Connected to CollabFS session!
 
-Friend: Sync from CRDT to /Users/devB/webapp-copy
+Join Code: crimson-falcon-2025-11-18-xyz456
+User ID: user_def789
+Server: wss://collabfs-server-production.up.railway.app
+
+You can now collaborate in real-time!
+
+Friend: Download all files to /Users/devB/webapp-copy
 
 Gemini: Synced 47 file(s) to /Users/devB/webapp-copy
 
@@ -108,12 +109,12 @@ Gemini: Found 47 file(s):
 /src/index.ts
   Size: 234 bytes
   Modified: 2025-11-19...
-  By: host-user
+  By: user_abc123
 
 /assets/logo.png
   Size: 1523 bytes (binary)
   Modified: 2025-11-19...
-  By: host-user
+  By: user_abc123
 ...
 ```
 
@@ -141,27 +142,64 @@ Host's auto-sync immediately writes changes to `/Users/devA/webapp/src/api.ts`
 
 ## Tool Reference
 
-### collabfs_connect
+### collabfs_host_session
 
-Connect to a collaborative session.
+Start a NEW collaborative session and get a join code.
 
 **Parameters:**
-- `sessionId` (required): Session identifier (all collaborators must use same ID)
-- `userId` (optional): Your user identifier (auto-generated if not provided)
+- `localPath` (optional): Absolute path to directory to sync immediately
+- `watch` (optional, default: true): Enable file watching if localPath provided
+- `autoSync` (optional, default: true): Enable automatic remote-to-disk sync if localPath provided
+- `exclude` (optional): Patterns to exclude if localPath provided
 
 **Example:**
 ```javascript
-collabfs_connect({
-  sessionId: "my-project-session"
+collabfs_host_session({
+  localPath: "/Users/me/my-project"
 })
 ```
 
 **Output:**
 ```
-Connected to CollabFS session "my-project-session" as "user_abc123"
+🎉 CollabFS session started!
+
+╔════════════════════════════════════════════════════════════╗
+║  JOIN CODE: purple-tiger-2025-11-18-abc123                ║
+╚════════════════════════════════════════════════════════════╝
+
+Share this code with your friend!
+
+Synced 47 file(s) from /Users/me/my-project
+File watcher active: Local changes will automatically sync to CollabFS
+Auto-sync active: Remote changes will automatically sync to disk
+```
+
+---
+
+### collabfs_connect
+
+Connect to an EXISTING collaborative session using a join code.
+
+**Parameters:**
+- `joinCode` (required): Join code from the host
+- `userId` (optional): Your user identifier (auto-generated if not provided)
+
+**Example:**
+```javascript
+collabfs_connect({
+  joinCode: "purple-tiger-2025-11-18-abc123"
+})
+```
+
+**Output:**
+```
+✅ Connected to CollabFS session!
+
+Join Code: purple-tiger-2025-11-18-abc123
+User ID: user_abc123
 Server: wss://collabfs-server-production.up.railway.app
 
-You can now collaborate with other AI agents in real-time!
+You can now collaborate in real-time!
 ```
 
 ---
@@ -616,13 +654,13 @@ Large files (>10MB) load entirely into memory:
 
 **Reviewer shares code:**
 ```
-Reviewer: Connect to CollabFS session "code-review-auth-feature"
-Reviewer: Sync directory /Users/reviewer/project/src/auth with watch=false
+Reviewer: Start CollabFS session on /Users/reviewer/project/src/auth
+→ Gets join code: orange-hawk-2025-11-18-qrs234
 ```
 
 **Colleague reviews:**
 ```
-Colleague: Connect to CollabFS session "code-review-auth-feature"
+Colleague: Join CollabFS with code orange-hawk-2025-11-18-qrs234
 Colleague: List all files
 Colleague: Read file /auth.ts
 Colleague: (provides feedback via chat, not editing files)
@@ -632,14 +670,14 @@ Colleague: (provides feedback via chat, not editing files)
 
 **Driver:**
 ```
-Driver: Connect to CollabFS session "pair-session-feature-x"
-Driver: Sync directory /Users/driver/project with watch=true autoSync=true
+Driver: Start CollabFS session on /Users/driver/project
+→ Gets join code: emerald-wolf-2025-11-18-tuv789
 ```
 
 **Navigator:**
 ```
-Navigator: Connect to CollabFS session "pair-session-feature-x"
-Navigator: Sync from CRDT to /Users/navigator/project-copy
+Navigator: Join CollabFS with code emerald-wolf-2025-11-18-tuv789
+Navigator: Download all files to /Users/navigator/project-copy
 Navigator: Read file /src/feature-x.ts
 Navigator: (suggests changes, driver implements)
 ```
@@ -648,15 +686,15 @@ Navigator: (suggests changes, driver implements)
 
 **Claude writes tests:**
 ```
-You: Connect to CollabFS session "test-writing-session"
-You: Sync directory /Users/me/project with watch=true autoSync=true
+You: Start CollabFS session on /Users/me/project
+→ Gets join code: amber-dragon-2025-11-18-wxy012
 You: Write tests for all functions in /src/utils.ts
 ```
 
 **Gemini reviews and refactors:**
 ```
-Friend: Connect to CollabFS session "test-writing-session"
-Friend: Sync from CRDT to /tmp/project-review
+Friend: Join CollabFS with code amber-dragon-2025-11-18-wxy012
+Friend: Download all files to /tmp/project-review
 Friend: Review all test files and suggest improvements
 ```
 

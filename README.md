@@ -6,7 +6,7 @@ Real-time collaborative filesystem for AI agents. Two people, two AI agents, one
 
 You and your friend can both work on the same project in real-time through your AI agents (Claude, Gemini, etc.). When your friend edits a file, it instantly appears on your computer. When you edit a file, it instantly appears on theirs.
 
-## Installation (30 seconds)
+## Installation (10 seconds)
 
 Add this to your AI agent's MCP config:
 
@@ -18,9 +18,7 @@ Add this to your AI agent's MCP config:
       "command": "npx",
       "args": ["collabfs-mcp@latest"],
       "env": {
-        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app",
-        "COLLABFS_SESSION_ID": "YOUR-SESSION-NAME-HERE",
-        "COLLABFS_USER_ID": "YOUR-NAME-HERE"
+        "COLLABFS_SERVER_URL": "wss://collabfs-server-production.up.railway.app"
       }
     }
   }
@@ -31,24 +29,25 @@ Add this to your AI agent's MCP config:
 
 Restart your AI agent.
 
-## Usage (3 steps)
+## Usage (2 steps)
 
 ### You (Host)
 
 Tell your AI agent:
 ```
-Connect to CollabFS session "my-project"
-Sync directory /path/to/your/project with watch=true and autoSync=true
+Start CollabFS session on /path/to/your/project
 ```
 
-Share your session name with your friend: `"my-project"`
+Your AI will respond with a **join code** like: `purple-tiger-2025-11-18-abc123`
+
+Share this code with your friend.
 
 ### Your Friend
 
 Tell their AI agent:
 ```
-Connect to CollabFS session "my-project"
-Sync from CRDT to /path/where/they/want/files
+Join CollabFS with code purple-tiger-2025-11-18-abc123
+Download all files to /path/where/they/want/files
 ```
 
 ### Done
@@ -56,19 +55,27 @@ Sync from CRDT to /path/where/they/want/files
 - You edit files locally → friend sees changes instantly
 - Friend tells their AI to edit files → you see changes instantly
 - Works with any file type (code, images, PDFs, etc.)
+- No manual session ID configuration needed
 
 ## Example
 
 **You:**
 ```
-You: Connect to CollabFS session "webapp-collab"
-You: Sync directory /Users/me/webapp with watch=true and autoSync=true
+You: Start CollabFS session on /Users/me/webapp
+
+AI: 🎉 CollabFS session started!
+
+    JOIN CODE: purple-tiger-2025-11-18-abc123
+
+    Share this code with your friend!
 ```
 
 **Friend:**
 ```
-Friend: Connect to CollabFS session "webapp-collab"
-Friend: Sync from CRDT to /Users/friend/webapp
+Friend: Join CollabFS with code purple-tiger-2025-11-18-abc123
+Friend: Download all files to /Users/friend/webapp
+
+AI: ✅ Connected! Synced 47 files to /Users/friend/webapp
 ```
 
 **Result:** Both of you are now editing the same codebase through your AI agents in real-time.
@@ -77,7 +84,8 @@ Friend: Sync from CRDT to /Users/friend/webapp
 
 Your AI agent has these tools:
 
-- `collabfs_connect` - Join a session
+- `collabfs_host_session` - Start a NEW session and get a join code (host only)
+- `collabfs_connect` - Join an EXISTING session with a join code (collaborators)
 - `collabfs_sync_directory` - Load your local files (use `watch=true` and `autoSync=true`)
 - `collabfs_sync_from_crdt` - Download all files from session
 - `collabfs_read_file` - Read a specific file
@@ -117,28 +125,27 @@ A: No. Requires WebSocket connection to server.
 ## Troubleshooting
 
 **"Not connected to CollabFS"**
-Run `collabfs_connect` first before any other commands.
+- Host: Run `collabfs_host_session` to start a new session
+- Collaborator: Run `collabfs_connect` with the join code from the host
 
 **Changes not syncing**
-Make sure both users have:
-- Same `COLLABFS_SESSION_ID`
-- Same `COLLABFS_SERVER_URL`
-- Host used `watch=true` and `autoSync=true`
+Make sure:
+- Both users are using the same join code
+- Same `COLLABFS_SERVER_URL` in MCP config
+- Host used `watch=true` and `autoSync=true` when syncing directory
 
 **File not found**
 Run `collabfs_list_files` to see what's actually in the session.
 
 ## Advanced: Session Management
 
-**Good session IDs:**
-- `"webapp-feature-auth-2025-11-19"`
-- `"hackathon-project-abc123"`
+Join codes are auto-generated with format: `{adjective}-{animal}-{date}-{random}`
 
-**Bad session IDs:**
-- `"session"` (too generic, name collisions)
-- `"test"` (same problem)
+Examples:
+- `purple-tiger-2025-11-18-abc123`
+- `golden-dragon-2025-11-18-xyz789`
 
-Use descriptive, unique session IDs. Anyone with the session ID can join.
+Anyone with the join code can connect to your session. Keep join codes private.
 
 ## License
 
@@ -158,8 +165,11 @@ collabfs/
 
 ## Version
 
-Current: v1.2.0
+Current: v1.3.0
 
+- Zero-config join codes (no manual session ID setup)
+- `collabfs_host_session` tool for starting sessions
+- Human-readable session IDs
 - Binary file support
 - Automatic bidirectional sync
 - File watcher debouncing
